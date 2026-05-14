@@ -1,188 +1,88 @@
 #!/bin/bash
-
 set -e
 
 echo "======================================="
-echo " Cloudflare Firewall Auto Installer"
-echo " Ubuntu Only"
+echo " Cloudflare Firewall ENABLE (Stable)"
 echo "======================================="
-
-# =========================
-# 配置
-# =========================
-
-SSH_PORT="22"
-
-CF_IPV4_URL="https://www.cloudflare.com/ips-v4"
-CF_IPV6_URL="https://www.cloudflare.com/ips-v6"
 
 IPSET_V4="cloudflare4"
 IPSET_V6="cloudflare6"
-
-SCRIPT_PATH="/usr/local/bin/cf-firewall-update.sh"
+CHAIN="CF_CLOUDFLARE"
 
 # =========================
 # 安装依赖
 # =========================
-
 apt-get update -y
 apt-get install -y curl ipset iptables iptables-persistent
 
 # =========================
-# 创建更新脚本
-# =========================
-
-cat > $SCRIPT_PATH << 'EOF'
-#!/bin/bash
-
-set -e
-
-IPSET_V4="cloudflare4"
-IPSET_V6="cloudflare6"
-
 # 创建 ipset
+# =========================
 ipset create ${IPSET_V4} hash:net family inet -exist
 ipset create ${IPSET_V6} hash:net family inet6 -exist
 
-# 清空旧数据
 ipset flush ${IPSET_V4}
 ipset flush ${IPSET_V6}
 
-# 拉取 Cloudflare IP
-CF_IPV4=$(curl -s https://www.cloudflare.com/ips-v4)
-CF_IPV6=$(curl -s https://www.cloudflare.com/ips-v6)
-
-# IPv4
-for ip in $CF_IPV4
-do
+# =========================
+# 创建 / 更新 Cloudflare IP
+# =========================
+for ip in $(curl -s https://www.cloudflare.com/ips-v4); do
     ipset add ${IPSET_V4} $ip -exist
 done
 
-# IPv6
-for ip in $CF_IPV6
-do
+for ip in $(curl -s https://www.cloudflare.com/ips-v6); do
     ipset add ${IPSET_V6} $ip -exist
 done
 
-echo "Cloudflare IP Updated"
-EOF
-
-chmod +x $SCRIPT_PATH
-
 # =========================
-# 首次执行更新
+# 创建专用 chain（核心）
 # =========================
+iptables -N ${CHAIN} 2>/dev/null || true
+iptables -F ${CHAIN}
 
-bash $SCRIPT_PATH
+ip6tables -N ${CHAIN} 2>/dev/null || true
+ip6tables -F ${CHAIN}
 
 # =========================
-# 放行 SSH
+# 绑定 INPUT -> CF_CHAIN（只做一次）
 # =========================
+iptables -C INPUT -j ${CHAIN} 2>/dev/null || \
+iptables -I INPUT 1 -j ${CHAIN}
 
-iptables -C INPUT -p tcp --dport ${SSH_PORT} -j ACCEPT 2>/dev/null || \
-iptables -A INPUT -p tcp --dport ${SSH_PORT} -j ACCEPT
+ip6tables -C INPUT -j ${CHAIN} 2>/dev/null || \
+ip6tables -I INPUT 1 -j ${CHAIN}
 
 # =========================
-# 放行已建立连接
+# CF_CHAIN 规则（IPv4）
 # =========================
+iptables -A ${CHAIN} -p tcp --dport 80 -m set --match-set ${IPSET_V4} src -j RETURN
+iptables -A ${CHAIN} -p tcp --dport 443 -m set --match-set ${IPSET_V4} src -j RETURN
+
+iptables -A ${CHAIN} -p tcp --dport 80 -j DROP
+iptables -A ${CHAIN} -p tcp --dport 443 -j DROP
+
+# =========================
+# CF_CHAIN 规则（IPv6）
+# =========================
+ip6tables -A ${CHAIN} -p tcp --dport 80 -m set --match-set ${IPSET_V6} src -j RETURN
+ip6tables -A ${CHAIN} -p tcp --dport 443 -m set --match-set ${IPSET_V6} src -j RETURN
+
+ip6tables -A ${CHAIN} -p tcp --dport 80 -j DROP
+ip6tables -A ${CHAIN} -p tcp --dport 443 -j DROP
+
+# =========================
+# SSH 放行（直接 INPUT）
+# =========================
+iptables -C INPUT -p tcp --dport 22 -j ACCEPT 2>/dev/null || \
+iptables -A INPUT -p tcp --dport 22 -j ACCEPT
 
 iptables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
 iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
 # =========================
-# 80 端口
+# 保存
 # =========================
-
-iptables -C INPUT -p tcp --dport 80 -m set --match-set ${IPSET_V4} src -j ACCEPT 2>/dev/null || \
-iptables -A INPUT -p tcp --dport 80 -m set --match-set ${IPSET_V4} src -j ACCEPT
-
-iptables -C INPUT -p tcp --dport 80 -j DROP 2>/dev/null || \
-iptables -A INPUT -p tcp --dport 80 -j DROP
-
-# =========================
-# 443 端口
-# =========================
-
-iptables -C INPUT -p tcp --dport 443 -m set --match-set ${IPSET_V4} src -j ACCEPT 2>/dev/null || \
-iptables -A INPUT -p tcp --dport 443 -m set --match-set ${IPSET_V4} src -j ACCEPT
-
-iptables -C INPUT -p tcp --dport 443 -j DROP 2>/dev/null || \
-iptables -A INPUT -p tcp --dport 443 -j DROP
-
-# =========================
-# IPv6
-# =========================
-
-ip6tables -C INPUT -p tcp --dport 80 -m set --match-set ${IPSET_V6} src -j ACCEPT 2>/dev/null || \
-ip6tables -A INPUT -p tcp --dport 80 -m set --match-set ${IPSET_V6} src -j ACCEPT
-
-ip6tables -C INPUT -p tcp --dport 80 -j DROP 2>/dev/null || \
-ip6tables -A INPUT -p tcp --dport 80 -j DROP
-
-ip6tables -C INPUT -p tcp --dport 443 -m set --match-set ${IPSET_V6} src -j ACCEPT 2>/dev/null || \
-ip6tables -A INPUT -p tcp --dport 443 -m set --match-set ${IPSET_V6} src -j ACCEPT
-
-ip6tables -C INPUT -p tcp --dport 443 -j DROP 2>/dev/null || \
-ip6tables -A INPUT -p tcp --dport 443 -j DROP
-
-# =========================
-# 保存规则
-# =========================
-
 netfilter-persistent save
 
-# =========================
-# 创建 systemd service
-# =========================
-
-cat > /etc/systemd/system/cf-firewall-update.service << EOF
-[Unit]
-Description=Update Cloudflare Firewall IPs
-
-[Service]
-Type=oneshot
-ExecStart=$SCRIPT_PATH
-EOF
-
-# =========================
-# 创建 systemd timer
-# =========================
-
-cat > /etc/systemd/system/cf-firewall-update.timer << EOF
-[Unit]
-Description=Run Cloudflare Firewall Update every 6 hours
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=6h
-Unit=cf-firewall-update.service
-
-[Install]
-WantedBy=timers.target
-EOF
-
-# =========================
-# 启动 timer
-# =========================
-
-systemctl daemon-reload
-systemctl enable cf-firewall-update.timer
-systemctl start cf-firewall-update.timer
-
-echo "======================================="
-echo " 安装完成"
-echo "======================================="
-echo ""
-echo " 已开启："
-echo " - 仅允许 Cloudflare 访问 80/443"
-echo " - SSH 保持开放"
-echo " - 自动同步 Cloudflare IP"
-echo " - 开机自动启动"
-echo ""
-echo " systemd timer:"
-echo " cf-firewall-update.timer"
-echo ""
-echo " 查看状态："
-echo " systemctl status cf-firewall-update.timer"
-echo ""
-echo "======================================="
+echo "Cloudflare ENABLE DONE"
