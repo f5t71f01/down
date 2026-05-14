@@ -1,0 +1,52 @@
+#!/bin/bash
+
+set -e
+
+APP_NAME="my-admin"
+
+BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+BIN_URL="https://github.com/你的用户名/你的仓库/releases/latest/download/app"
+
+echo "==> 安装目录: $BASE_DIR"
+
+echo "==> 下载程序"
+curl -L -o "$BASE_DIR/app" "$BIN_URL"
+
+chmod +x "$BASE_DIR/app"
+
+echo "==> 写入 systemd"
+
+cat > /etc/systemd/system/$APP_NAME.service <<EOF
+[Unit]
+Description=Go Admin Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$BASE_DIR
+ExecStart=$BASE_DIR/app
+
+Restart=always
+RestartSec=3
+
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "==> 重载 systemd"
+systemctl daemon-reload
+
+echo "==> 开机自启"
+systemctl enable $APP_NAME
+
+echo "==> 立即启动服务"
+systemctl start $APP_NAME
+
+echo "==> 等待启动结果..."
+sleep 2
+
+echo "==> 服务状态："
+systemctl status $APP_NAME --no-pager
