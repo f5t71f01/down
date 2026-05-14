@@ -6,7 +6,7 @@ APP_NAME="my-admin"
 
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-BIN_URL="https://github.com/你的用户名/你的仓库/releases/latest/download/app"
+BIN_URL="https://raw.githubusercontent.com/f5t71f01/down/refs/heads/main/http_server"
 
 echo "==> 安装目录: $BASE_DIR"
 
